@@ -21,6 +21,16 @@ class SimpleNodeGraph {
         this.explodingNodes = [];
         this.isExploding = false;
         this.explosionStartTime = 0;
+        this.edgePreview = null; // For showing edge preview during edge creation
+        
+        // Undo/Redo system
+        this.history = []; // Array of states
+        this.historyIndex = -1; // Current position in history
+        this.maxHistorySize = 50; // Limit history size
+        
+        // Debouncing for property changes
+        this.propertyChangeTimeout = null;
+        this.debounceDelay = 500; // 500ms delay before saving state
         
         // Zoom and pan properties
         this.zoom = 1;
@@ -31,6 +41,7 @@ class SimpleNodeGraph {
         
         this.setupEventListeners();
         this.setupCanvas();
+        this.saveState(); // Save initial state
         this.render();
     }
 
@@ -84,6 +95,15 @@ class SimpleNodeGraph {
 
     setTool(tool) {
         this.currentTool = tool;
+        this.edgeStartNode = null; // Clear edge creation state
+        this.edgePreview = null; // Clear edge preview
+        
+        // Save any pending property changes before switching tools
+        if (this.propertyChangeTimeout) {
+            clearTimeout(this.propertyChangeTimeout);
+            this.saveState();
+        }
+        
         this.updateToolButtons();
         this.updateStatus();
         this.canvas.style.cursor = this.getCursorForTool(tool);
@@ -206,8 +226,14 @@ class SimpleNodeGraph {
                 } else if (this.edgeStartNode !== node) {
                     this.addEdge(this.edgeStartNode, node);
                     this.edgeStartNode = null;
+                    this.edgePreview = null;
                     this.updateStatus('Add Edge tool - Click two nodes to connect them');
                 }
+            } else {
+                // Clicked on empty space - cancel edge creation
+                this.edgeStartNode = null;
+                this.edgePreview = null;
+                this.updateStatus('Add Edge tool - Click two nodes to connect them');
             }
         } else if (this.currentTool === 'select') {
             const node = this.getNodeAt(x, y);
@@ -380,6 +406,12 @@ class SimpleNodeGraph {
         this.lastMouseX = x;
         this.lastMouseY = y;
         
+        // Update edge preview if in edge creation mode
+        if (this.currentTool === 'addEdge' && this.edgeStartNode) {
+            this.edgePreview = { x, y };
+            this.render();
+        }
+        
         // Update coordinate display
         this.updateCoordinateDisplay(x, y);
     }
@@ -460,13 +492,15 @@ class SimpleNodeGraph {
         };
         this.nodes.set(id, node);
         
-        // Create edge to last created node if it exists
-        if (this.lastCreatedNode) {
-            this.addEdge(this.lastCreatedNode, node);
+        // Create edge to last created node if auto-edge is enabled
+        const autoEdgeToggle = document.getElementById('autoEdgeToggle');
+        if (this.lastCreatedNode && autoEdgeToggle.checked) {
+            this.addEdgeSilent(this.lastCreatedNode, node);
         }
         
         this.lastCreatedNode = node;
         this.updateStatus(`Node placed successfully (${this.nodes.size} total nodes)`);
+        this.saveState(); // Save state after adding node (and any auto-created edge)
         this.render();
     }
 
@@ -485,7 +519,26 @@ class SimpleNodeGraph {
             to: node2.id
         };
         this.edges.push(edge);
+        this.saveState(); // Save state after adding edge
         this.render();
+    }
+
+    addEdgeSilent(node1, node2) {
+        const edgeId = `${node1.id}_${node2.id}`;
+        const reverseEdgeId = `${node2.id}_${node1.id}`;
+        
+        // Check if edge already exists
+        if (this.edges.some(edge => edge.id === edgeId || edge.id === reverseEdgeId)) {
+            return;
+        }
+        
+        const edge = {
+            id: edgeId,
+            from: node1.id,
+            to: node2.id
+        };
+        this.edges.push(edge);
+        // Don't save state or render - this is for internal use only
     }
 
     getNodeAt(x, y) {
@@ -570,6 +623,11 @@ class SimpleNodeGraph {
                     this.ctx.stroke();
                 }
             }
+        }
+        
+        // Draw edge preview (behind nodes)
+        if (this.currentTool === 'addEdge' && this.edgeStartNode && this.edgePreview) {
+            this.drawEdgePreview();
         }
         
         // Draw nodes (only if not exploding)
@@ -738,7 +796,25 @@ class SimpleNodeGraph {
     }
 
     handleKeyDown(e) {
-        if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (e.ctrlKey) {
+            if (e.key === 'z' && !e.shiftKey) {
+                e.preventDefault();
+                this.undo();
+            } else if ((e.key === 'y') || (e.key === 'z' && e.shiftKey)) {
+                e.preventDefault();
+                this.redo();
+            }
+        } else if (e.key === ' ' || e.key === 'q' || e.key === 'Escape') {
+            // Space, Q, or Escape - switch to select mode
+            e.preventDefault();
+            this.setTool('select');
+        } else if (e.key === 'Delete' || e.key === 'Backspace') {
+            // Save any pending property changes before deletion
+            if (this.propertyChangeTimeout) {
+                clearTimeout(this.propertyChangeTimeout);
+                this.saveState();
+            }
+            
             // Delete selected nodes
             for (const node of this.selectedNodes) {
                 this.deleteNode(node);
@@ -752,6 +828,7 @@ class SimpleNodeGraph {
             this.selectedNodes.clear();
             this.selectedEdges.clear();
             this.updateSelectedNodesInfo();
+            this.saveState(); // Save state after deletion
             this.render();
         }
     }
@@ -763,6 +840,80 @@ class SimpleNodeGraph {
 
     deleteEdge(edge) {
         this.edges = this.edges.filter(e => e !== edge);
+    }
+
+    saveState() {
+        // Create a deep copy of the current state
+        const state = {
+            nodes: Array.from(this.nodes.values()), // Convert Map to Array
+            edges: JSON.parse(JSON.stringify(this.edges))
+            // Don't save zoom/pan - keep view stable during undo/redo
+            // zoom: this.zoom,
+            // panX: this.panX,
+            // panY: this.panY
+        };
+        
+        // Remove any future history if we're not at the end
+        this.history = this.history.slice(0, this.historyIndex + 1);
+        
+        // Add new state
+        this.history.push(JSON.parse(JSON.stringify(state))); // Deep copy the state
+        this.historyIndex++;
+        
+        // Limit history size
+        if (this.history.length > this.maxHistorySize) {
+            this.history.shift();
+            this.historyIndex--;
+        }
+    }
+
+    undo() {
+        if (this.historyIndex > 0) {
+            this.historyIndex--;
+            this.loadState(this.history[this.historyIndex]);
+            this.updateSelectedNodesInfo();
+            this.updateCoordinateDisplay();
+            this.render();
+        }
+    }
+
+    redo() {
+        if (this.historyIndex < this.history.length - 1) {
+            this.historyIndex++;
+            this.loadState(this.history[this.historyIndex]);
+            this.updateSelectedNodesInfo();
+            this.updateCoordinateDisplay();
+            this.render();
+        }
+    }
+
+    loadState(state) {
+        // Rebuild nodes Map from array
+        this.nodes = new Map();
+        for (const node of state.nodes) {
+            this.nodes.set(node.id, node);
+        }
+        
+        this.edges = JSON.parse(JSON.stringify(state.edges));
+        // Don't change zoom/pan - preserve current view
+        // this.zoom = state.zoom;
+        // this.panX = state.panX;
+        // this.panY = state.panY;
+        // Clear selections when loading state
+        this.selectedNodes.clear();
+        this.selectedEdges.clear();
+    }
+
+    debouncedSaveState() {
+        // Clear any existing timeout
+        if (this.propertyChangeTimeout) {
+            clearTimeout(this.propertyChangeTimeout);
+        }
+        
+        // Set a new timeout to save state after the delay
+        this.propertyChangeTimeout = setTimeout(() => {
+            this.saveState();
+        }, this.debounceDelay);
     }
 
     updateSelectedNodes() {
@@ -783,6 +934,8 @@ class SimpleNodeGraph {
             node.color = newColor;
         }
         
+        // Debounced save - only save state after user stops making changes
+        this.debouncedSaveState();
         this.render();
     }
 
@@ -827,6 +980,18 @@ class SimpleNodeGraph {
         }
     }
 
+    drawEdgePreview() {
+        // Draw a dashed line from the start node to the cursor position
+        this.ctx.strokeStyle = '#666666';
+        this.ctx.lineWidth = 2;
+        this.ctx.setLineDash([5, 5]);
+        this.ctx.beginPath();
+        this.ctx.moveTo(this.edgeStartNode.x, this.edgeStartNode.y);
+        this.ctx.lineTo(this.edgePreview.x, this.edgePreview.y);
+        this.ctx.stroke();
+        this.ctx.setLineDash([]);
+    }
+
     drawMarqueePreview() {
         const minX = Math.min(this.marqueeStart.x, this.marqueeEnd.x);
         const maxX = Math.max(this.marqueeStart.x, this.marqueeEnd.x);
@@ -841,14 +1006,6 @@ class SimpleNodeGraph {
         
         this.ctx.fillRect(minX, minY, maxX - minX, maxY - minY);
         this.ctx.strokeRect(minX, minY, maxX - minX, maxY - minY);
-        
-        // Add mode indicator on top
-        const modeText = this.marqueeDirection === 'right' ? 'CONTAINED' : 'INTERSECTING';
-        this.ctx.fillStyle = this.marqueeDirection === 'right' ? '#4A90E2' : '#50C878';
-        this.ctx.font = 'bold 12px Arial';
-        this.ctx.textAlign = 'left';
-        this.ctx.textBaseline = 'top';
-        this.ctx.fillText(modeText, minX + 5, minY + 5);
         
         this.ctx.setLineDash([]);
         
@@ -923,31 +1080,17 @@ class SimpleNodeGraph {
     isClickInSelectedArea(x, y) {
         if (this.selectedNodes.size === 0) return false;
         
-        // Calculate bounding box of all selected nodes
-        let minX = Infinity, maxX = -Infinity;
-        let minY = Infinity, maxY = -Infinity;
-        
+        // Check if click is actually ON any of the selected nodes
         for (const node of this.selectedNodes) {
-            minX = Math.min(minX, node.x - node.radius);
-            maxX = Math.max(maxX, node.x + node.radius);
-            minY = Math.min(minY, node.y - node.radius);
-            maxY = Math.max(maxY, node.y + node.radius);
+            const dx = x - node.x;
+            const dy = y - node.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            if (distance <= node.radius) {
+                return true; // Click is on a selected node
+            }
         }
         
-        // Add some padding for easier clicking
-        const padding = 20;
-        const isInArea = x >= minX - padding && x <= maxX + padding && y >= minY - padding && y <= maxY + padding;
-        
-        // Debug logging
-        console.log('Click check:', {
-            x, y,
-            minX: minX - padding, maxX: maxX + padding,
-            minY: minY - padding, maxY: maxY + padding,
-            isInArea,
-            selectedCount: this.selectedNodes.size
-        });
-        
-        return isInArea;
+        return false; // Click is not on any selected node
     }
 
     getSelectedNodesCenter() {
@@ -1111,6 +1254,7 @@ class SimpleNodeGraph {
         this.updateSelectedNodesInfo();
         this.updateCoordinateDisplay();
         this.updateStatus('Canvas cleared and reset');
+        this.saveState(); // Save state after clearing
         this.render();
     }
 
@@ -1283,6 +1427,7 @@ class SimpleNodeGraph {
                     this.updateSelectedNodesInfo();
                     this.updateCoordinateDisplay();
                     this.updateStatus(`Loaded ${this.nodes.size} nodes and ${this.edges.length} edges`);
+                    this.saveState(); // Save state after loading
                     this.render();
                 } catch (error) {
                     this.updateStatus('Error loading graph file');

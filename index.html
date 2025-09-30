@@ -219,6 +219,52 @@
             color: #ccc;
             font-family: monospace;
         }
+
+        /* Toggle Switch Styles */
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 40px;
+            height: 20px;
+        }
+
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #555;
+            transition: .3s;
+            border-radius: 20px;
+        }
+
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 16px;
+            width: 16px;
+            left: 2px;
+            bottom: 2px;
+            background-color: white;
+            transition: .3s;
+            border-radius: 50%;
+        }
+
+        .toggle-switch input:checked + .toggle-slider {
+            background-color: #0066cc;
+        }
+
+        .toggle-switch input:checked + .toggle-slider:before {
+            transform: translateX(20px);
+        }
     </style>
 </head>
 <body>
@@ -228,8 +274,18 @@
             <div class="tools-grid">
                 <button class="tool-btn active" id="selectTool">Select</button>
                 <button class="tool-btn" id="addNodeTool">Add Node</button>
+                <button class="tool-btn" id="zoomExtentsTool">Zoom Extents</button>
                 <button class="tool-btn" id="addEdgeTool">Add Edge</button>
-                    <button class="tool-btn" id="zoomExtentsTool">Zoom Extents</button>
+            </div>
+            
+            <div class="form-group" style="margin-top: 15px; text-align: center;">
+                <label style="display: flex; align-items: center; justify-content: center; cursor: pointer;">
+                    <div class="toggle-switch">
+                        <input type="checkbox" id="autoEdgeToggle" checked>
+                        <span class="toggle-slider"></span>
+                    </div>
+                    <span style="margin-left: 10px;">Auto-Edge</span>
+                </label>
             </div>
         </div>
 
