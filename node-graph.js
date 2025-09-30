@@ -17,6 +17,10 @@ class SimpleNodeGraph {
         this.marqueeEnd = { x: 0, y: 0 };
         this.marqueeDirection = 'right'; // 'right' for contained, 'left' for intersecting
         this.lastCreatedNode = null;
+        this.isMouseOverCanvas = false;
+        this.explodingNodes = [];
+        this.isExploding = false;
+        this.explosionStartTime = 0;
         
         // Zoom and pan properties
         this.zoom = 1;
@@ -52,6 +56,12 @@ class SimpleNodeGraph {
         document.getElementById('addEdgeTool').addEventListener('click', () => this.setTool('addEdge'));
         document.getElementById('zoomExtentsTool').addEventListener('click', () => this.zoomExtents());
         
+        // Bottom buttons
+        document.getElementById('saveBtn').addEventListener('click', () => this.saveGraph());
+        document.getElementById('loadBtn').addEventListener('click', () => this.loadGraph());
+        document.getElementById('exportBtn').addEventListener('click', () => this.exportGraph());
+        document.getElementById('clearBtn').addEventListener('click', () => this.clearReset());
+        
         // Node property updates - automatic on input change
         document.getElementById('nodeName').addEventListener('input', () => this.updateSelectedNodes());
         document.getElementById('nodeColor').addEventListener('input', () => this.updateSelectedNodes());
@@ -61,6 +71,8 @@ class SimpleNodeGraph {
         this.canvas.addEventListener('mousemove', (e) => this.handleMouseMove(e));
         this.canvas.addEventListener('mouseup', (e) => this.handleMouseUp(e));
         this.canvas.addEventListener('wheel', (e) => this.handleWheel(e));
+        this.canvas.addEventListener('mouseenter', () => this.handleMouseEnter());
+        this.canvas.addEventListener('mouseleave', () => this.handleMouseLeave());
         
         // Global mouse events for marquee selection that goes outside canvas
         document.addEventListener('mousemove', (e) => this.handleGlobalMouseMove(e));
@@ -298,6 +310,7 @@ class SimpleNodeGraph {
                     this.isMarqueeSelecting = true;
                     this.marqueeStart = { x, y };
                     this.marqueeEnd = { x, y };
+                    this.marqueeStartScreenX = e.clientX - rect.left; // Store screen X for direction detection
                     this.marqueeDirection = 'right'; // Will be updated on first move
                 }
             }
@@ -305,6 +318,15 @@ class SimpleNodeGraph {
         
         this.updateSelectedNodesInfo();
         this.render();
+    }
+
+    handleMouseEnter() {
+        this.isMouseOverCanvas = true;
+    }
+
+    handleMouseLeave() {
+        this.isMouseOverCanvas = false;
+        this.updateCoordinateDisplay();
     }
 
     handleMouseMove(e) {
@@ -343,8 +365,10 @@ class SimpleNodeGraph {
             // Update marquee selection and determine direction
             this.marqueeEnd = { x, y };
             
-            // Determine direction based on drag direction
-            if (x < this.marqueeStart.x) {
+            // Determine direction based on drag direction (use screen coordinates for consistency)
+            const rect = this.canvas.getBoundingClientRect();
+            const screenX = e.clientX - rect.left;
+            if (screenX < this.marqueeStartScreenX) {
                 this.marqueeDirection = 'left'; // Intersecting selection
             } else {
                 this.marqueeDirection = 'right'; // Contained selection
@@ -355,20 +379,27 @@ class SimpleNodeGraph {
         
         this.lastMouseX = x;
         this.lastMouseY = y;
+        
+        // Update coordinate display
+        this.updateCoordinateDisplay(x, y);
     }
 
     handleGlobalMouseMove(e) {
         if (this.isMarqueeSelecting) {
             const rect = this.canvas.getBoundingClientRect();
-            const x = e.clientX - rect.left;
-            const y = e.clientY - rect.top;
+            const screenX = e.clientX - rect.left;
+            const screenY = e.clientY - rect.top;
             
             // Check if mouse is outside canvas
-            if (x < 0 || x > rect.width || y < 0 || y > rect.height) {
+            if (screenX < 0 || screenX > rect.width || screenY < 0 || screenY > rect.height) {
+                // Transform screen coordinates to canvas coordinates (accounting for zoom and pan)
+                const x = (screenX - this.panX) / this.zoom;
+                const y = (screenY - this.panY) / this.zoom;
+                
                 this.marqueeEnd = { x, y };
                 
-                // Determine direction based on drag direction
-                if (x < this.marqueeStart.x) {
+                // Determine direction based on drag direction (use original screen coordinates for direction)
+                if (screenX < this.marqueeStartScreenX) {
                     this.marqueeDirection = 'left'; // Intersecting selection
                 } else {
                     this.marqueeDirection = 'right'; // Contained selection
@@ -524,24 +555,33 @@ class SimpleNodeGraph {
         this.ctx.translate(this.panX, this.panY);
         this.ctx.scale(this.zoom, this.zoom);
         
-        // Draw edges first (so they appear behind nodes)
-        for (const edge of this.edges) {
-            const node1 = this.nodes.get(edge.from);
-            const node2 = this.nodes.get(edge.to);
-            
-            if (node1 && node2) {
-                this.ctx.strokeStyle = this.selectedEdges.has(edge) ? '#ffffff' : '#666666';
-                this.ctx.lineWidth = this.selectedEdges.has(edge) ? 3 : 2;
-                this.ctx.beginPath();
-                this.ctx.moveTo(node1.x, node1.y);
-                this.ctx.lineTo(node2.x, node2.y);
-                this.ctx.stroke();
+        // Draw edges first (so they appear behind nodes) - only if not exploding
+        if (!this.isExploding) {
+            for (const edge of this.edges) {
+                const node1 = this.nodes.get(edge.from);
+                const node2 = this.nodes.get(edge.to);
+                
+                if (node1 && node2) {
+                    this.ctx.strokeStyle = this.selectedEdges.has(edge) ? '#ffffff' : '#666666';
+                    this.ctx.lineWidth = this.selectedEdges.has(edge) ? 3 : 2;
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(node1.x, node1.y);
+                    this.ctx.lineTo(node2.x, node2.y);
+                    this.ctx.stroke();
+                }
             }
         }
         
-        // Draw nodes
-        for (const node of this.nodes.values()) {
-            this.drawNode(node);
+        // Draw nodes (only if not exploding)
+        if (!this.isExploding) {
+            for (const node of this.nodes.values()) {
+                this.drawNode(node);
+            }
+        }
+        
+        // Draw exploding particles
+        if (this.isExploding) {
+            this.drawExplodingParticles();
         }
         
         // Draw marquee selection box
@@ -576,6 +616,18 @@ class SimpleNodeGraph {
         this.ctx.fillText(node.label, node.x, node.y);
     }
 
+    drawExplodingParticles() {
+        for (const particle of this.explodingNodes) {
+            this.ctx.save();
+            this.ctx.globalAlpha = particle.life;
+            this.ctx.fillStyle = particle.color;
+            this.ctx.beginPath();
+            this.ctx.arc(particle.x, particle.y, particle.size, 0, 2 * Math.PI);
+            this.ctx.fill();
+            this.ctx.restore();
+        }
+    }
+
     getContrastingTextColor(backgroundColor) {
         // Convert hex to RGB
         const hex = backgroundColor.replace('#', '');
@@ -597,8 +649,10 @@ class SimpleNodeGraph {
         
         if (this.marqueeDirection === 'right') {
             this.selectContainedInMarquee(minX, minY, maxX, maxY);
+            this.updateStatus(`Contained selection: ${this.selectedNodes.size} nodes, ${this.selectedEdges.size} edges`);
         } else {
             this.selectIntersectingWithMarquee(minX, minY, maxX, maxY);
+            this.updateStatus(`Intersecting selection: ${this.selectedNodes.size} nodes, ${this.selectedEdges.size} edges`);
         }
     }
 
@@ -610,11 +664,11 @@ class SimpleNodeGraph {
             }
         }
         
-        // Select edges that intersect with marquee
+        // Select edges that are fully contained within marquee (both endpoints inside)
         for (const edge of this.edges) {
             const node1 = this.nodes.get(edge.from);
             const node2 = this.nodes.get(edge.to);
-            if (node1 && node2 && this.edgeIntersectsMarquee(node1, node2, minX, minY, maxX, maxY)) {
+            if (node1 && node2 && this.edgeFullyContainedInMarquee(node1, node2, minX, minY, maxX, maxY)) {
                 this.selectedEdges.add(edge);
             }
         }
@@ -630,7 +684,7 @@ class SimpleNodeGraph {
             }
         }
         
-        // Select edges that intersect with marquee
+        // Select edges that intersect with marquee (at least one endpoint inside OR line intersects)
         for (const edge of this.edges) {
             const node1 = this.nodes.get(edge.from);
             const node2 = this.nodes.get(edge.to);
@@ -647,14 +701,12 @@ class SimpleNodeGraph {
         const x1 = node1.x, y1 = node1.y;
         const x2 = node2.x, y2 = node2.y;
         
-        // Check if any of the four corners of the marquee are on the edge
-        const corners = [
-            [minX, minY], [maxX, minY], [maxX, maxY], [minX, maxY]
-        ];
+        // First check if either endpoint is inside the marquee
+        const p1Inside = (x1 >= minX && x1 <= maxX && y1 >= minY && y1 <= maxY);
+        const p2Inside = (x2 >= minX && x2 <= maxX && y2 >= minY && y2 <= maxY);
         
-        for (const [cx, cy] of corners) {
-            const distance = this.pointToLineDistance(cx, cy, x1, y1, x2, y2);
-            if (distance <= 5) return true; // 5 pixel tolerance
+        if (p1Inside || p2Inside) {
+            return true;
         }
         
         // Check if edge intersects with any of the four sides of the marquee
@@ -662,6 +714,17 @@ class SimpleNodeGraph {
                this.linesIntersect(x1, y1, x2, y2, maxX, minY, maxX, maxY) ||
                this.linesIntersect(x1, y1, x2, y2, maxX, maxY, minX, maxY) ||
                this.linesIntersect(x1, y1, x2, y2, minX, maxY, minX, minY);
+    }
+    
+    edgeFullyContainedInMarquee(node1, node2, minX, minY, maxX, maxY) {
+        // Check if both endpoints of the edge are inside the marquee
+        const x1 = node1.x, y1 = node1.y;
+        const x2 = node2.x, y2 = node2.y;
+        
+        const p1Inside = (x1 >= minX && x1 <= maxX && y1 >= minY && y1 <= maxY);
+        const p2Inside = (x2 >= minX && x2 <= maxX && y2 >= minY && y2 <= maxY);
+        
+        return p1Inside && p2Inside;
     }
 
     linesIntersect(x1, y1, x2, y2, x3, y3, x4, y4) {
@@ -772,12 +835,20 @@ class SimpleNodeGraph {
         
         // Draw marquee box
         this.ctx.strokeStyle = this.marqueeDirection === 'right' ? '#4A90E2' : '#50C878';
-        this.ctx.fillStyle = this.marqueeDirection === 'right' ? 'rgba(74, 144, 226, 0.1)' : 'rgba(80, 200, 120, 0.1)';
+        this.ctx.fillStyle = this.marqueeDirection === 'right' ? 'rgba(74, 144, 226, 0.05)' : 'rgba(80, 200, 120, 0.05)';
         this.ctx.lineWidth = 2;
         this.ctx.setLineDash([5, 5]);
         
         this.ctx.fillRect(minX, minY, maxX - minX, maxY - minY);
         this.ctx.strokeRect(minX, minY, maxX - minX, maxY - minY);
+        
+        // Add mode indicator on top
+        const modeText = this.marqueeDirection === 'right' ? 'CONTAINED' : 'INTERSECTING';
+        this.ctx.fillStyle = this.marqueeDirection === 'right' ? '#4A90E2' : '#50C878';
+        this.ctx.font = 'bold 12px Arial';
+        this.ctx.textAlign = 'left';
+        this.ctx.textBaseline = 'top';
+        this.ctx.fillText(modeText, minX + 5, minY + 5);
         
         this.ctx.setLineDash([]);
         
@@ -793,11 +864,11 @@ class SimpleNodeGraph {
                 }
             }
             
-            // Highlight edges that intersect
+            // Highlight edges that are fully contained
             for (const edge of this.edges) {
                 const node1 = this.nodes.get(edge.from);
                 const node2 = this.nodes.get(edge.to);
-                if (node1 && node2 && this.edgeIntersectsMarquee(node1, node2, minX, minY, maxX, maxY)) {
+                if (node1 && node2 && this.edgeFullyContainedInMarquee(node1, node2, minX, minY, maxX, maxY)) {
                     this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
                     this.ctx.lineWidth = 4;
                     this.ctx.beginPath();
@@ -892,6 +963,338 @@ class SimpleNodeGraph {
             x: centerX / this.selectedNodes.size,
             y: centerY / this.selectedNodes.size
         };
+    }
+
+    updateCoordinateDisplay(x, y) {
+        const coordinateText = document.getElementById('coordinateText');
+        
+        if (this.isMouseOverCanvas && x !== undefined && y !== undefined) {
+            // Show cursor coordinates
+            coordinateText.textContent = `X: ${Math.round(x)}, Y: ${Math.round(y)}`;
+        } else {
+            // Show center coordinates
+            const canvasWidth = this.canvas.width / window.devicePixelRatio;
+            const canvasHeight = this.canvas.height / window.devicePixelRatio;
+            const centerX = (canvasWidth / 2 - this.panX) / this.zoom;
+            const centerY = (canvasHeight / 2 - this.panY) / this.zoom;
+            coordinateText.textContent = `X: ${Math.round(centerX)}, Y: ${Math.round(centerY)}`;
+        }
+    }
+
+    clearReset() {
+        if (this.isExploding) return; // Prevent multiple explosions
+        
+        // Start explosion animation
+        this.startExplosion();
+    }
+
+    startExplosion() {
+        this.isExploding = true;
+        this.explosionStartTime = Date.now();
+        this.explodingNodes = [];
+        
+        // Create exploding particles for each node
+        for (const node of this.nodes.values()) {
+            const numParticles = 8 + Math.random() * 8; // 8-16 particles per node
+            for (let i = 0; i < numParticles; i++) {
+                const angle = (Math.PI * 2 * i) / numParticles + Math.random() * 0.5;
+                const speed = 2 + Math.random() * 4; // Random speed
+                const size = 3 + Math.random() * 6; // Random particle size
+                
+                this.explodingNodes.push({
+                    x: node.x,
+                    y: node.y,
+                    vx: Math.cos(angle) * speed,
+                    vy: Math.sin(angle) * speed,
+                    color: node.color,
+                    size: size,
+                    life: 1.0,
+                    decay: 0.02 + Math.random() * 0.03
+                });
+            }
+        }
+        
+        // Create exploding particles for each edge
+        for (const edge of this.edges) {
+            const node1 = this.nodes.get(edge.from);
+            const node2 = this.nodes.get(edge.to);
+            
+            if (node1 && node2) {
+                // Calculate edge length and direction
+                const dx = node2.x - node1.x;
+                const dy = node2.y - node1.y;
+                const length = Math.sqrt(dx * dx + dy * dy);
+                const numParticles = Math.max(3, Math.floor(length / 20)); // More particles for longer edges
+                
+                for (let i = 0; i < numParticles; i++) {
+                    // Position particles along the edge
+                    const t = i / (numParticles - 1);
+                    const x = node1.x + dx * t;
+                    const y = node1.y + dy * t;
+                    
+                    // Random direction perpendicular to edge + some randomness
+                    const perpAngle = Math.atan2(dy, dx) + Math.PI / 2 + (Math.random() - 0.5) * Math.PI;
+                    const speed = 1 + Math.random() * 3; // Slightly slower than node particles
+                    const size = 2 + Math.random() * 4; // Smaller than node particles
+                    
+                    this.explodingNodes.push({
+                        x: x,
+                        y: y,
+                        vx: Math.cos(perpAngle) * speed,
+                        vy: Math.sin(perpAngle) * speed,
+                        color: '#666666', // Gray color for edges
+                        size: size,
+                        life: 1.0,
+                        decay: 0.015 + Math.random() * 0.025 // Slightly slower decay
+                    });
+                }
+            }
+        }
+        
+        // Start animation loop
+        this.animateExplosion();
+    }
+
+    animateExplosion() {
+        if (!this.isExploding) return;
+        
+        const currentTime = Date.now();
+        const elapsed = currentTime - this.explosionStartTime;
+        
+        // Update particle positions
+        for (let i = this.explodingNodes.length - 1; i >= 0; i--) {
+            const particle = this.explodingNodes[i];
+            
+            // Update position
+            particle.x += particle.vx;
+            particle.y += particle.vy;
+            
+            // Apply gravity (slight downward pull)
+            particle.vy += 0.1;
+            
+            // Update life
+            particle.life -= particle.decay;
+            
+            // Remove dead particles
+            if (particle.life <= 0) {
+                this.explodingNodes.splice(i, 1);
+            }
+        }
+        
+        this.render();
+        
+        // Continue animation if there are still particles or if it's been less than 2 seconds
+        if (this.explodingNodes.length > 0 || elapsed < 2000) {
+            requestAnimationFrame(() => this.animateExplosion());
+        } else {
+            // Animation finished, now clear everything
+            this.finishClear();
+        }
+    }
+
+    finishClear() {
+        // Clear all nodes and edges
+        this.nodes.clear();
+        this.edges = [];
+        this.selectedNodes.clear();
+        this.selectedEdges.clear();
+        this.lastCreatedNode = null;
+        this.explodingNodes = [];
+        this.isExploding = false;
+        
+        // Reset zoom and pan
+        this.zoom = 1;
+        this.panX = 0;
+        this.panY = 0;
+        
+        // Update UI
+        this.updateSelectedNodesInfo();
+        this.updateCoordinateDisplay();
+        this.updateStatus('Canvas cleared and reset');
+        this.render();
+    }
+
+    exportGraph() {
+        if (this.nodes.size === 0) {
+            this.updateStatus('No nodes to export');
+            return;
+        }
+
+        // Create a high-resolution canvas for export
+        const exportScale = 2; // 2x resolution for high quality
+        const canvasWidth = this.canvas.width / window.devicePixelRatio;
+        const canvasHeight = this.canvas.height / window.devicePixelRatio;
+        
+        const exportCanvas = document.createElement('canvas');
+        exportCanvas.width = canvasWidth * exportScale;
+        exportCanvas.height = canvasHeight * exportScale;
+        const exportCtx = exportCanvas.getContext('2d');
+        
+        // Set high DPI scaling
+        exportCtx.scale(exportScale, exportScale);
+        
+        // Fill background
+        exportCtx.fillStyle = '#2a2a2a';
+        exportCtx.fillRect(0, 0, canvasWidth, canvasHeight);
+        
+        // Apply zoom and pan transformations
+        exportCtx.save();
+        exportCtx.translate(this.panX, this.panY);
+        exportCtx.scale(this.zoom, this.zoom);
+        
+        // Draw edges first
+        for (const edge of this.edges) {
+            const node1 = this.nodes.get(edge.from);
+            const node2 = this.nodes.get(edge.to);
+            
+            if (node1 && node2) {
+                exportCtx.strokeStyle = this.selectedEdges.has(edge) ? '#ffffff' : '#666666';
+                exportCtx.lineWidth = this.selectedEdges.has(edge) ? 3 : 2;
+                exportCtx.beginPath();
+                exportCtx.moveTo(node1.x, node1.y);
+                exportCtx.lineTo(node2.x, node2.y);
+                exportCtx.stroke();
+            }
+        }
+        
+        // Draw nodes
+        for (const node of this.nodes.values()) {
+            this.drawNodeForExport(exportCtx, node);
+        }
+        
+        exportCtx.restore();
+        
+        // Convert to blob and download
+        exportCanvas.toBlob((blob) => {
+            if (blob) {
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `node-graph-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.png`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(url);
+                
+                this.updateStatus(`Exported ${this.nodes.size} nodes and ${this.edges.length} edges`);
+            } else {
+                this.updateStatus('Export failed');
+            }
+        }, 'image/png');
+    }
+
+    drawNodeForExport(ctx, node) {
+        const isSelected = this.selectedNodes.has(node);
+        
+        // Draw node circle
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, node.radius, 0, 2 * Math.PI);
+        ctx.fillStyle = node.color;
+        ctx.fill();
+        
+        // Draw selection border
+        if (isSelected) {
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 3;
+            ctx.stroke();
+        }
+        
+        // Draw node label
+        ctx.fillStyle = this.getContrastingTextColor(node.color);
+        ctx.font = '14px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(node.label, node.x, node.y);
+    }
+
+    saveGraph() {
+        if (this.nodes.size === 0) {
+            this.updateStatus('No graph to save');
+            return;
+        }
+
+        const graphData = {
+            nodes: Array.from(this.nodes.values()),
+            edges: this.edges,
+            zoom: this.zoom,
+            panX: this.panX,
+            panY: this.panY,
+            version: '1.0',
+            timestamp: new Date().toISOString()
+        };
+
+        const dataStr = JSON.stringify(graphData, null, 2);
+        const dataBlob = new Blob([dataStr], { type: 'application/vnd.vizideya.nodegraph' });
+        
+        const url = URL.createObjectURL(dataBlob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `vizideya-graph-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.vng`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+
+        this.updateStatus(`Saved ${this.nodes.size} nodes and ${this.edges.length} edges as .vng file`);
+    }
+
+    loadGraph() {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.vng,.json';
+        input.style.display = 'none';
+        
+        input.onchange = (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const graphData = JSON.parse(e.target.result);
+                    
+                    // Validate the data structure
+                    if (!graphData.nodes || !Array.isArray(graphData.nodes) || !Array.isArray(graphData.edges)) {
+                        this.updateStatus('Invalid graph file format');
+                        return;
+                    }
+
+                    // Clear current graph
+                    this.nodes.clear();
+                    this.edges = [];
+                    this.selectedNodes.clear();
+                    this.selectedEdges.clear();
+                    this.lastCreatedNode = null;
+
+                    // Load nodes
+                    for (const nodeData of graphData.nodes) {
+                        this.nodes.set(nodeData.id, nodeData);
+                    }
+
+                    // Load edges
+                    this.edges = graphData.edges || [];
+
+                    // Load view settings
+                    this.zoom = graphData.zoom || 1;
+                    this.panX = graphData.panX || 0;
+                    this.panY = graphData.panY || 0;
+
+                    // Update UI
+                    this.updateSelectedNodesInfo();
+                    this.updateCoordinateDisplay();
+                    this.updateStatus(`Loaded ${this.nodes.size} nodes and ${this.edges.length} edges`);
+                    this.render();
+                } catch (error) {
+                    this.updateStatus('Error loading graph file');
+                    console.error('Load error:', error);
+                }
+            };
+            reader.readAsText(file);
+        };
+
+        document.body.appendChild(input);
+        input.click();
+        document.body.removeChild(input);
     }
 }
 

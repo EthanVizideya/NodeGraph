@@ -60,6 +60,10 @@
             border-right: 1px solid #444;
             padding: 20px;
             overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            box-sizing: border-box;
         }
 
         .main-area {
@@ -151,6 +155,70 @@
             background: rgba(0, 102, 204, 0.1);
             pointer-events: none;
         }
+
+        .bottom-buttons {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-top: auto;
+            padding: 0;
+            background: #2d2d2d;
+            border-top: 1px solid #444;
+            margin-bottom: 0;
+        }
+
+        .button-row {
+            display: flex;
+            gap: 10px;
+        }
+
+        .btn-export {
+            flex: 1;
+            background: #4CAF50;
+        }
+
+        .btn-export:hover {
+            background: #45a049;
+        }
+
+        .btn-clear {
+            flex: 1;
+            background: #f44336;
+        }
+
+        .btn-clear:hover {
+            background: #da190b;
+        }
+
+        .btn-save {
+            flex: 1;
+            background: #2196F3;
+        }
+
+        .btn-save:hover {
+            background: #1976D2;
+        }
+
+        .btn-load {
+            flex: 1;
+            background: #FF9800;
+        }
+
+        .btn-load:hover {
+            background: #F57C00;
+        }
+
+        .coordinate-display {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            background: rgba(45, 45, 45, 0.9);
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #ccc;
+            font-family: monospace;
+        }
     </style>
 </head>
 <body>
@@ -183,12 +251,26 @@
                 No nodes selected
             </div>
         </div>
+
+        <div class="bottom-buttons">
+            <div class="button-row">
+                <button class="btn btn-save" id="saveBtn">Save</button>
+                <button class="btn btn-load" id="loadBtn">Load</button>
+            </div>
+            <div class="button-row">
+                <button class="btn btn-export" id="exportBtn">Export</button>
+                <button class="btn btn-clear" id="clearBtn">Clear Reset</button>
+            </div>
+        </div>
     </div>
 
         <div class="main-area">
         <canvas id="canvas"></canvas>
         <div class="status-bar">
             <span id="statusText">Ready - Click to add nodes</span>
+        </div>
+        <div class="coordinate-display">
+            <span id="coordinateText">X: 0, Y: 0</span>
         </div>
     </div>
 
