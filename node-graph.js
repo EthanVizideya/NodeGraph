@@ -39,6 +39,10 @@ class SimpleNodeGraph {
         this.isPanning = false;
         this.panStart = { x: 0, y: 0 };
         
+        // Rendering optimization
+        this.renderScheduled = false;
+        this.animationFrameId = null;
+        
         this.setupEventListeners();
         this.setupCanvas();
         this.saveState(); // Save initial state
@@ -599,6 +603,17 @@ class SimpleNodeGraph {
     }
 
     render() {
+        // Schedule rendering on next animation frame to keep UI responsive
+        if (this.renderScheduled) return;
+        
+        this.renderScheduled = true;
+        this.animationFrameId = requestAnimationFrame(() => {
+            this.renderScheduled = false;
+            this.performRender();
+        });
+    }
+    
+    performRender() {
         // Clear with canvas background color
         this.ctx.fillStyle = '#2a2a2a';
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
@@ -1311,10 +1326,16 @@ class SimpleNodeGraph {
         // Convert to blob and download
         exportCanvas.toBlob((blob) => {
             if (blob) {
+                const now = new Date();
+                const month = String(now.getMonth() + 1).padStart(2, '0');
+                const day = String(now.getDate()).padStart(2, '0');
+                const timeCode = (now.getTime() % 46656).toString(36).toUpperCase().padStart(3, '0');
+                const filename = `NodeGraph-${day}${month}-${timeCode}.png`;
+                
                 const url = URL.createObjectURL(blob);
                 const link = document.createElement('a');
                 link.href = url;
-                link.download = `node-graph-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.png`;
+                link.download = filename;
                 document.body.appendChild(link);
                 link.click();
                 document.body.removeChild(link);
@@ -1370,10 +1391,16 @@ class SimpleNodeGraph {
         const dataStr = JSON.stringify(graphData, null, 2);
         const dataBlob = new Blob([dataStr], { type: 'application/vnd.vizideya.nodegraph' });
         
+        const now = new Date();
+        const month = String(now.getMonth() + 1).padStart(2, '0');
+        const day = String(now.getDate()).padStart(2, '0');
+        const timeCode = (now.getTime() % 46656).toString(36).toUpperCase().padStart(3, '0');
+        const filename = `NodeGraph-${day}${month}-${timeCode}.vng`;
+        
         const url = URL.createObjectURL(dataBlob);
         const link = document.createElement('a');
         link.href = url;
-        link.download = `vizideya-graph-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.vng`;
+        link.download = filename;
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
